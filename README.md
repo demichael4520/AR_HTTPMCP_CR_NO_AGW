@@ -3,6 +3,8 @@
 This repository acts as a combined layout/guide for hosting and deploying a Model Context Protocol (MCP) weather server on Google Cloud Run and configuring a Vertex AI Agent Engine (Reasoning Engine) client agent to query it.
 
 ## Contents
+- [cloud_run/](cloud_run/) - Cloud Run FastMCP Weather Server code and Dockerfile.
+- [agent_runtime/](agent_runtime/) - Vertex AI Agent Engine Client Agent code and configuration.
 - [DEPLOYMENT.md](DEPLOYMENT.md) - Step-by-step guide covering GCP API setup, critical IAM permissions, and deployment instructions.
 
 ## High-Level Architecture

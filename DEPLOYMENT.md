@@ -8,7 +8,7 @@ This guide outlines the step-by-step workflow and critical IAM permissions requi
 The deployments must be executed in a strict sequential order:
 1. **First, deploy the Cloud Run FastMCP Server.**
 2. **Obtain the generated Cloud Run Service URI.**
-3. **Update the Client Agent's configuration (`agent.py`) with the obtained SSE URL.**
+3. **Update the Client Agent's configuration (`agent.py`) with the obtained Streamable HTTP URL.**
 4. **Finally, deploy the Client Agent to Vertex AI Agent Engine.**
 
 The Agent Engine Client *cannot* function or be successfully deployed without the final, live endpoint of the MCP Server.
@@ -43,7 +43,7 @@ You must grant the following IAM roles to the default Compute service account (`
 
 | Role / Permission | Purpose | Command |
 | :--- | :--- | :--- |
-| **Storage Object Viewer** (`roles/storage.objectViewer`) | Allows Cloud Build to read the uploaded staging source code from Cloud Storage. | `gcloud projects add-iam-policy-binding YOUR_PROJECT_ID --member="serviceAccount:<PROJECT_NUMBER>-compute@developer.gserviceaccount.com" --role="roles/storage.objectViewer"` |
+| **Storage Admin** (`roles/storage.admin`) | Allows Cloud Build to manage and read uploaded staging source code in Cloud Storage. | `gcloud projects add-iam-policy-binding YOUR_PROJECT_ID --member="serviceAccount:<PROJECT_NUMBER>-compute@developer.gserviceaccount.com" --role="roles/storage.admin"` |
 | **Artifact Registry Writer** (`roles/artifactregistry.writer`) | Allows Cloud Build to push the newly built container image to Artifact Registry. | `gcloud projects add-iam-policy-binding YOUR_PROJECT_ID --member="serviceAccount:<PROJECT_NUMBER>-compute@developer.gserviceaccount.com" --role="roles/artifactregistry.writer"` |
 | **Logs Writer** (`roles/logging.logWriter`) | Allows Cloud Build to write execution logs to Cloud Logging. | `gcloud projects add-iam-policy-binding YOUR_PROJECT_ID --member="serviceAccount:<PROJECT_NUMBER>-compute@developer.gserviceaccount.com" --role="roles/logging.logWriter"` |
 
@@ -55,17 +55,12 @@ You must grant the following IAM roles to the default Compute service account (`
 
 ### Step 1: Deploy the FastMCP Server to Cloud Run
 
-1. **Clone the FastMCP Server repository** to download the server code locally:
+1. **Navigate to the Cloud Run server directory**:
    ```bash
-   git clone https://github.com/demichael4520/cr_mcp_weather
+   cd cloud_run
    ```
 
-2. **Navigate to the cloned FastMCP Server directory** (referred to as `path/to/cr_mcp_weather` throughout this guide):
-   ```bash
-   cd cr_mcp_weather
-   ```
-
-3. **Deploy to Cloud Run** using the following command:
+2. **Deploy to Cloud Run** using the following command:
    ```bash
    gcloud run deploy mcp-weather-server \
      --source . \
@@ -74,20 +69,20 @@ You must grant the following IAM roles to the default Compute service account (`
      --project=YOUR_PROJECT_ID
    ```
 
-4. **Obtain the Service URL**: Once successfully deployed, copy the **Service URL** from the command output (e.g. `https://mcp-weather-server-xxxxx.us-central1.run.app`).
+3. **Obtain the Service URL**: Once successfully deployed, copy the **Service URL** from the command output (e.g. `https://mcp-weather-server-xxxxx.us-central1.run.app`).
 
 ---
 
 ### Step 2: Configure the Client Agent
 
-1. Open the Client Agent's configuration file (`agent.py`).
-2. Find the `McpToolset` / `SseConnectionParams` declaration.
-3. Update the `url` to reflect your live Cloud Run Service SSE path by appending `/sse` to the Service URL:
+1. Open the Client Agent's configuration file (`agent_runtime/agent.py`).
+2. Find the `McpToolset` / `StreamableHTTPConnectionParams` declaration.
+3. Update the `url` to reflect your live Cloud Run Service Streamable HTTP path by appending `/mcp` to the Service URL:
    ```python
-   # agent.py
+   # agent_runtime/agent.py
    mcp_toolset = McpToolset(
-       connection_params=SseConnectionParams(
-           url="https://YOUR_CLOUD_RUN_SERVICE_URL/sse",  # Replace with your live URL
+       connection_params=StreamableHTTPConnectionParams(
+           url="https://YOUR_CLOUD_RUN_SERVICE_URL/mcp",  # Replace with your live URL
        )
    )
    ```
@@ -104,59 +99,28 @@ You must grant the following IAM roles to the default Compute service account (`
 
 ### Step 3: Deploy the Client Agent to Vertex AI Agent Engine
 
-To prevent deployment payload size errors caused by local virtual environments (`venv`), package only the required files into a temporary directory:
+With the modular folder structure, `agent_runtime` is isolated from the root virtual environment (`venv`). You can deploy directly from this directory:
 
-1. Create a clean staging directory:
-   ```bash
-   mkdir -p /tmp/weather_deploy
-   ```
-2. Copy the necessary agent files and enable Agent Identity:
-   ```bash
-   cp agent.py requirements.txt __init__.py /tmp/weather_deploy/
-   echo '{ "identity_type": "AGENT_IDENTITY" }' > /tmp/weather_deploy/.agent_engine_config.json
-   ```
-3. Deploy the agent from the staging directory using the ADK CLI:
-   ```bash
-   adk deploy agent_engine \
-     --project=YOUR_PROJECT_ID \
-     --region=us-central1 \
-     --display_name="MCP Weather Client" \
-     /tmp/weather_deploy
-   ```
-4. Clean up the staging directory:
-   ```bash
-   rm -rf /tmp/weather_deploy
-   ```
+```bash
+adk deploy agent_engine \
+  --project=YOUR_PROJECT_ID \
+  --region=us-central1 \
+  --display_name="MCP Weather Client" \
+  ./agent_runtime
+```
 
 ---
 
 ## 🧪 Verification
 
-To verify that the Reasoning Engine agent is successfully routed to your Cloud Run MCP Server, query the deployed Reasoning Engine. 
+### 1. Verification via Agent Runtime Playground (Console)
 
-Because newer ADK runtimes may expose asynchronous methods that are incompatible with standard synchronous SDK invocation bindings, query the agent using the **low-level streaming API client**:
+You can test the agent interactively via the Google Cloud Console:
+1. Open the [Vertex AI Agent Engine Console](https://console.cloud.google.com/vertex-ai/agent-engine).
+2. Click on your deployed **MCP Weather Client** agent.
+3. Switch to the **Playground** test interface.
+4. Send a test prompt:
+   > "What is the weather in Tokyo?"
+5. Verify that the agent successfully invokes the remote Cloud Run MCP tool to retrieve live weather data.
 
-```python
-import vertexai
-from vertexai.preview import reasoning_engines
-from google.cloud.aiplatform_v1beta1 import types as aip_types
-from vertexai.reasoning_engines import _utils
 
-vertexai.init(project="YOUR_PROJECT_ID", location="us-central1")
-
-reasoning_engine = reasoning_engines.ReasoningEngine("YOUR_REASONING_ENGINE_ID")
-execution_client = reasoning_engine.execution_api_client
-
-request = aip_types.StreamQueryReasoningEngineRequest(
-    name=reasoning_engine.resource_name,
-    input={"message": "What is the weather in Tokyo?", "user_id": "test_user"},
-    class_method="stream_query"
-)
-
-response_stream = execution_client.stream_query_reasoning_engine(request=request)
-
-for chunk in response_stream:
-    for parsed in _utils.yield_parsed_json(chunk):
-        if parsed and "output" in parsed:
-            print(parsed["output"], end="")
-```
